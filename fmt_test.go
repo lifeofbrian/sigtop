@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/tbvdm/sigtop/errio"
@@ -155,6 +156,70 @@ func TestTextWriteMessage(t *testing.T) {
 		"\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("textWriteMessage(): want %q, have %q", want, got)
+	}
+}
+
+func TestTextWriteMessageWithEdits(t *testing.T) {
+	// Edited messages render the version history instead of the top-level body.
+	msg := signal.Message{
+		Type:     "outgoing",
+		TimeSent: -1,
+		Body:     signal.MessageBody{Text: "current"},
+		Edits: []signal.Edit{
+			{
+				TimeEdit: -1,
+				Body:     signal.MessageBody{Text: "previous"},
+				Attachments: []signal.Attachment{
+					{ContentType: "image/jpeg"},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	ew := errio.NewWriter(&buf)
+	textWriteMessage(ew, &msg)
+	if err := ew.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := buf.String()
+	for _, want := range []string{
+		"From: You\n",
+		"Edited: 1 versions\n",
+		"| Version: 1\n",
+		"| Attachment: no filename (image/jpeg, 0 bytes)\n",
+		"| Sent: unknown\n",
+		"| previous\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("textWriteMessage() edit history missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "current") {
+		t.Fatalf("textWriteMessage() edit history should not render current body: %q", got)
+	}
+}
+
+func TestTextWriteMessages(t *testing.T) {
+	// Multi-message text export starts with a conversation header.
+	alice := mainContact("Alice", "+15551234567")
+	msgs := []signal.Message{
+		{
+			Conversation: alice,
+			Type:         "outgoing",
+			TimeSent:     -1,
+			Body:         signal.MessageBody{Text: "hello"},
+		},
+	}
+
+	var buf bytes.Buffer
+	ew := errio.NewWriter(&buf)
+	if err := textWriteMessages(ew, msgs); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.HasPrefix(got, "Conversation: Alice (+15551234567)\n\n") {
+		t.Fatalf("textWriteMessages() header: have %q", got)
 	}
 }
 

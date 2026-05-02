@@ -122,3 +122,52 @@ func TestUnpad(t *testing.T) {
 		}
 	}
 }
+
+func TestDecryptErrors(t *testing.T) {
+	// Decryption rejects malformed ciphertext before returning plaintext.
+	app := NewApp("Signal", "/tmp/signal")
+	app.key = make([]byte, keySize)
+
+	if _, err := app.decrypt([]byte("bad"), linuxCiphertextPrefix); err == nil {
+		t.Fatal("decrypt() unsupported prefix: no error")
+	}
+	if _, err := app.decrypt([]byte(linuxCiphertextPrefix+"short"), linuxCiphertextPrefix); err == nil {
+		t.Fatal("decrypt() invalid length: no error")
+	}
+	if _, err := app.decrypt(append([]byte(linuxCiphertextPrefix), make([]byte, 16)...), linuxCiphertextPrefix); err == nil {
+		t.Fatal("decrypt() invalid padding: no error")
+	}
+}
+
+func TestDecryptWindowsErrors(t *testing.T) {
+	// Windows ciphertext carries a nonce after its prefix.
+	app := NewApp("Signal", "/tmp/signal")
+	app.key = make([]byte, windowsKeySize)
+
+	if _, err := app.decryptWindows([]byte("bad")); err == nil {
+		t.Fatal("decryptWindows() unsupported prefix: no error")
+	}
+	if _, err := app.decryptWindows([]byte(windowsCiphertextPrefix + "short")); err == nil {
+		t.Fatal("decryptWindows() short ciphertext: no error")
+	}
+}
+
+func TestBytePrefixHelpers(t *testing.T) {
+	// Prefix helpers work on byte slices because ciphertext is not text.
+	b := []byte("v11ciphertext")
+	if !hasPrefix(b, linuxCiphertextPrefix) {
+		t.Fatal("hasPrefix(): want true")
+	}
+	if got := string(trimPrefix(b, linuxCiphertextPrefix)); got != "ciphertext" {
+		t.Fatalf("trimPrefix(): want ciphertext, have %q", got)
+	}
+}
+
+func TestStoreEncryptionKeyUnsupported(t *testing.T) {
+	// Non-Windows implementations currently report StoreEncryptionKey as
+	// unsupported; Windows may fail for filesystem/DPAPI reasons instead.
+	app := NewApp("Signal", t.TempDir())
+	if err := app.StoreEncryptionKey([]byte("secret")); err == nil {
+		t.Fatal("StoreEncryptionKey(): no error")
+	}
+}

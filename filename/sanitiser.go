@@ -16,7 +16,6 @@ package filename
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"unicode"
@@ -96,7 +95,7 @@ func sanitiseMacos(name string) string {
 	runes := []rune(name)
 	for i, r := range runes {
 		// Note that APFS allows only Unicode 9.0 characters
-		if r == os.PathSeparator || unicode.IsControl(r) || !unicode.Is(unicode9, r) {
+		if r == '/' || unicode.IsControl(r) || !unicode.Is(unicode9, r) {
 			runes[i] = '_'
 		}
 	}
@@ -111,7 +110,7 @@ func sanitiseUnix(name string) string {
 
 	runes := []rune(name)
 	for i, r := range runes {
-		if r == os.PathSeparator || unicode.IsControl(r) {
+		if r == '/' || unicode.IsControl(r) {
 			runes[i] = '_'
 		}
 	}

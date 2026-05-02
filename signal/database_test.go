@@ -79,6 +79,43 @@ func TestRunPragmaCheck(t *testing.T) {
 	}
 }
 
+func TestRunPragmaForeignKeyCheck(t *testing.T) {
+	// foreign_key_check formats table/row details for database diagnostics.
+	db := memoryDB(t)
+	defer db.Close()
+	if err := db.Exec(`
+		PRAGMA foreign_keys = OFF;
+		CREATE TABLE parent (id INTEGER PRIMARY KEY);
+		CREATE TABLE child (parent_id INTEGER REFERENCES parent(id));
+		INSERT INTO child VALUES (99)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runPragmaCheck(db, "foreign_key_check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0] != "foreign key violation in row 1 of table child" {
+		t.Fatalf("foreign_key_check: have %v", results)
+	}
+}
+
+func TestCheckDatabase(t *testing.T) {
+	// A clean in-memory database should pass the combined checks.
+	db := memoryDB(t)
+	defer db.Close()
+	ctx := Context{db: db}
+
+	results, err := ctx.CheckDatabase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("CheckDatabase(): want no results, have %v", results)
+	}
+}
+
 func memoryDB(t *testing.T) *sqlcipher.DB {
 	// Use plain in-memory SQLite/SQLCipher for deterministic database helpers.
 	t.Helper()

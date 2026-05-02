@@ -15,6 +15,7 @@
 package signal
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -58,6 +59,92 @@ func TestAttachmentsFromJSON(t *testing.T) {
 	}
 }
 
+func TestAttachmentsForMessageFromDatabase(t *testing.T) {
+	// Newer database versions store attachment metadata in message_attachments.
+	db := memoryDB(t)
+	defer db.Close()
+	if err := db.Exec(`
+		CREATE TABLE message_attachments (
+			messageId TEXT,
+			editHistoryIndex INTEGER,
+			attachmentType TEXT,
+			orderInMessage INTEGER,
+			size INTEGER,
+			contentType TEXT,
+			path TEXT,
+			fileName TEXT,
+			localKey TEXT,
+			version INTEGER,
+			pending INTEGER
+		);
+		INSERT INTO message_attachments VALUES (
+			'message-id',
+			-1,
+			'attachment',
+			0,
+			123,
+			'image/jpeg',
+			'photo',
+			'photo.jpg',
+			'keys',
+			2,
+			1
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := Context{db: db, dbVersion: 1360}
+	msg := Message{ID: "message-id", TimeSent: 123, TimeRecv: 456}
+	atts, err := ctx.attachmentsForMessage(&msg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 1 {
+		t.Fatalf("attachmentsForMessage() len: want 1, have %d", len(atts))
+	}
+	att := atts[0]
+	if att.FileName != "photo.jpg" || att.ContentType != "image/jpeg" || !att.Pending || att.Size != 123 {
+		t.Fatalf("attachmentsForMessage(): have %+v", att)
+	}
+}
+
+func TestAttachmentsForMessageDatabaseFallback(t *testing.T) {
+	// Version 1360+ still falls back to JSON if the attachment table has no
+	// rows for an older message.
+	db := memoryDB(t)
+	defer db.Close()
+	if err := db.Exec(`
+		CREATE TABLE message_attachments (
+			messageId TEXT,
+			editHistoryIndex INTEGER,
+			attachmentType TEXT,
+			orderInMessage INTEGER,
+			size INTEGER,
+			contentType TEXT,
+			path TEXT,
+			fileName TEXT,
+			localKey TEXT,
+			version INTEGER,
+			pending INTEGER
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := Context{db: db, dbVersion: 1360}
+	msg := Message{ID: "message-id", TimeSent: 123, TimeRecv: 456}
+	atts, err := ctx.attachmentsForMessage(&msg, []attachmentJSON{
+		{ContentType: "text/plain", FileName: "note.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 1 || atts[0].FileName != "note.txt" {
+		t.Fatalf("attachmentsForMessage() fallback: have %+v", atts)
+	}
+}
+
 func TestReadAttachmentErrors(t *testing.T) {
 	// Pending attachments and attachment records without paths cannot be read.
 	ctx := Context{}
@@ -91,6 +178,37 @@ func TestReadAttachmentFileVersion1(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Fatalf("readAttachmentFile(): want %q, have %q", "hello", got)
+	}
+}
+
+func TestDecryptAttachmentErrors(t *testing.T) {
+	// Encrypted attachments validate key material, framing, and MAC before
+	// plaintext is returned.
+	if _, err := (&attachmentFile{Keys: "not-base64"}).decrypt("missing"); err == nil {
+		t.Fatal("decrypt() bad base64: no error")
+	}
+	shortKey := base64.StdEncoding.EncodeToString([]byte("short"))
+	if _, err := (&attachmentFile{Keys: shortKey}).decrypt("missing"); err == nil {
+		t.Fatal("decrypt() short key: no error")
+	}
+
+	dir := t.TempDir()
+	shortFile := filepath.Join(dir, "short")
+	if err := os.WriteFile(shortFile, []byte("short"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	keys := base64.StdEncoding.EncodeToString(make([]byte, cipherKeySize+macKeySize))
+	if _, err := (&attachmentFile{Keys: keys}).decrypt(shortFile); err == nil {
+		t.Fatal("decrypt() short data: no error")
+	}
+
+	macMismatchFile := filepath.Join(dir, "mac-mismatch")
+	data := make([]byte, ivSize+16+macSize)
+	if err := os.WriteFile(macMismatchFile, data, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&attachmentFile{Keys: keys, Size: 1}).decrypt(macMismatchFile); err == nil {
+		t.Fatal("decrypt() MAC mismatch: no error")
 	}
 }
 

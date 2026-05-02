@@ -16,6 +16,8 @@ package signal
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -138,6 +140,152 @@ func TestRecipientDisplayNameAndDetailGroup(t *testing.T) {
 				t.Fatalf("DetailedDisplayName(): want %q, have %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestMakeRecipientMapsAndConversations(t *testing.T) {
+	// A tiny conversations table exercises recipient JSON parsing, lookup maps,
+	// bidi trimming, and the built-in Signal avatar suppression.
+	db := memoryDB(t)
+	defer db.Close()
+	if err := db.Exec(`
+		CREATE TABLE conversations (
+			id TEXT,
+			json TEXT,
+			type TEXT,
+			name TEXT,
+			profileName TEXT,
+			profileFamilyName TEXT,
+			profileFullName TEXT,
+			e164 TEXT,
+			serviceId TEXT,
+			groupId TEXT
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`
+		INSERT INTO conversations VALUES (
+			'contact-id',
+			'{"username":"alice.123","profileAvatar":{"path":"images/profile-avatar.svg"}}',
+			'private',
+			'⁨Alice⁩',
+			'Alice',
+			'Family',
+			'Alice Family',
+			'+15551234567',
+			'ACI-ALICE',
+			NULL
+		);
+		INSERT INTO conversations VALUES (
+			'group-conversation',
+			'{}',
+			'group',
+			'Study Group',
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			'group-id'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := Context{
+		db:        db,
+		dbVersion: 88,
+	}
+	convs, err := ctx.Conversations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(convs) != 2 {
+		t.Fatalf("Conversations() len: want 2, have %d", len(convs))
+	}
+
+	contact, err := ctx.recipientFromConversationID("contact-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contact.Contact.Name != "Alice" || contact.Contact.Username != "alice.123" {
+		t.Fatalf("contact recipient: have %+v", contact.Contact)
+	}
+	if contact.ProfileAvatar.Path != "" {
+		t.Fatalf("Signal release avatar path should be ignored, have %q", contact.ProfileAvatar.Path)
+	}
+	if got, err := ctx.recipientFromPhone("+15551234567"); err != nil || got != contact {
+		t.Fatalf("recipientFromPhone(): want contact nil, have %+v %v", got, err)
+	}
+	if got, err := ctx.recipientFromACI("aci-alice"); err != nil || got != contact {
+		t.Fatalf("recipientFromACI(): want contact nil, have %+v %v", got, err)
+	}
+
+	group, err := ctx.recipientFromConversationID("group-conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Type != RecipientTypeGroup || group.Group.Name != "Study Group" {
+		t.Fatalf("group recipient: have %+v", group)
+	}
+}
+
+func TestMakeRecipientMapsErrors(t *testing.T) {
+	// Unknown recipient types should fail loudly when reading the conversations
+	// table.
+	db := memoryDB(t)
+	defer db.Close()
+	if err := db.Exec(`
+		CREATE TABLE conversations (
+			id TEXT,
+			json TEXT,
+			type TEXT,
+			name TEXT,
+			profileName TEXT,
+			profileFamilyName TEXT,
+			profileFullName TEXT,
+			e164 TEXT,
+			serviceId TEXT,
+			groupId TEXT
+		);
+		INSERT INTO conversations VALUES ('id', '{}', 'mystery', '', '', '', '', '', '', '')
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := Context{
+		db:        db,
+		dbVersion: 88,
+	}
+	if err := ctx.makeRecipientMaps(); err == nil {
+		t.Fatal("makeRecipientMaps() unknown type: no error")
+	}
+}
+
+func TestReadAvatar(t *testing.T) {
+	// Avatars share the attachment-file reader.
+	dir := t.TempDir()
+	attDir := filepath.Join(dir, AttachmentDir)
+	if err := os.Mkdir(attDir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(attDir, "avatar"), []byte("image"), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := Context{dir: dir}
+	data, err := ctx.ReadAvatar(&Avatar{
+		attachmentFile: attachmentFile{
+			Version: 1,
+			Path:    "avatar",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "image" {
+		t.Fatalf("ReadAvatar(): want image, have %q", data)
 	}
 }
 

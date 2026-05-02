@@ -17,6 +17,7 @@ package signal
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseMessageJSON(t *testing.T) {
@@ -138,5 +139,121 @@ func TestIsOutgoing(t *testing.T) {
 	}
 	if (&Message{Type: "incoming"}).IsOutgoing() {
 		t.Fatal("IsOutgoing() incoming: want false")
+	}
+}
+
+func TestConversationMessages(t *testing.T) {
+	// A tiny modern schema lets the query-selection paths run without a real
+	// Signal Desktop database.
+	ctx := messageQueryContext(t)
+	conv := Conversation{ID: "conv"}
+
+	tests := []struct {
+		name string
+		ival Interval
+		want []string
+	}{
+		{
+			name: "all",
+			want: []string{"m1", "m2", "m3"},
+		},
+		{
+			name: "sent before",
+			ival: Interval{Max: time.UnixMilli(2000)},
+			want: []string{"m1", "m2"},
+		},
+		{
+			name: "sent after",
+			ival: Interval{Min: time.UnixMilli(2000)},
+			want: []string{"m2", "m3"},
+		},
+		{
+			name: "sent between",
+			ival: Interval{
+				Min: time.UnixMilli(1500),
+				Max: time.UnixMilli(2500),
+			},
+			want: []string{"m2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs, err := ctx.ConversationMessages(&conv, tt.ival)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(msgs) != len(tt.want) {
+				t.Fatalf("ConversationMessages() len: want %d, have %d", len(tt.want), len(msgs))
+			}
+			for i, want := range tt.want {
+				if msgs[i].ID != want {
+					t.Fatalf("ConversationMessages()[%d]: want %q, have %q", i, want, msgs[i].ID)
+				}
+				if msgs[i].Conversation == nil || msgs[i].Source == nil {
+					t.Fatalf("ConversationMessages()[%d] recipients: have conversation=%+v source=%+v", i, msgs[i].Conversation, msgs[i].Source)
+				}
+			}
+		})
+	}
+}
+
+func TestConversationAttachments(t *testing.T) {
+	// ConversationAttachments flattens per-message attachment metadata.
+	ctx := messageQueryContext(t)
+	atts, err := ctx.ConversationAttachments(&Conversation{ID: "conv"}, Interval{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 1 {
+		t.Fatalf("ConversationAttachments() len: want 1, have %d", len(atts))
+	}
+	if atts[0].FileName != "photo.jpg" || atts[0].TimeSent != 2000 || atts[0].TimeRecv != 2010 {
+		t.Fatalf("ConversationAttachments(): have %+v", atts[0])
+	}
+}
+
+func messageQueryContext(t *testing.T) Context {
+	t.Helper()
+	db := memoryDB(t)
+	t.Cleanup(func() { db.Close() })
+
+	if err := db.Exec(`
+		CREATE TABLE conversations (
+			id TEXT,
+			json TEXT,
+			type TEXT,
+			name TEXT,
+			profileName TEXT,
+			profileFamilyName TEXT,
+			profileFullName TEXT,
+			e164 TEXT,
+			serviceId TEXT,
+			groupId TEXT
+		);
+		CREATE TABLE messages (
+			id TEXT,
+			conversationId TEXT,
+			sourceServiceId TEXT,
+			type TEXT,
+			body TEXT,
+			json TEXT,
+			sent_at INTEGER,
+			received_at INTEGER
+		);
+		INSERT INTO conversations VALUES
+			('conv', '{}', 'private', 'Conversation', '', '', '', '+15550000000', 'aci-conv', NULL),
+			('source', '{}', 'private', 'Source', '', '', '', '+15551111111', 'aci-source', NULL);
+		INSERT INTO messages VALUES
+			('m1', 'conv', 'aci-source', 'incoming', 'one', '{"received_at_ms":1010}', 1000, 1010),
+			('m2', 'conv', 'aci-source', 'incoming', 'two', '{"received_at_ms":2010,"attachments":[{"contentType":"image/jpeg","fileName":"photo.jpg","path":"photo","size":123}]}', 2000, 2010),
+			('m3', 'conv', 'aci-source', 'outgoing', 'three', '{"received_at_ms":3010}', 3000, 3010)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	return Context{
+		db:        db,
+		dbVersion: 88,
 	}
 }

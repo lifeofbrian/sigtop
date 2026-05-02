@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -141,6 +142,116 @@ func TestReadWriteIncrementalFile(t *testing.T) {
 		if !got[id] {
 			t.Fatalf("readIncrementalFile(): missing %q", id)
 		}
+	}
+}
+
+func TestConversationDir(t *testing.T) {
+	// Conversation attachment exports create one directory per recipient.
+	dir := t.TempDir()
+	d, err := at.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	opts := &attachmentExportOptions{
+		sanitiser: filename.NewSanitiser(filename.Unix),
+	}
+	conv := signal.Conversation{Recipient: mainContact("Alice/Bob", "+15551234567")}
+	cd, err := conversationDir(d, &conv, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cd.Close()
+
+	if info, err := os.Stat(filepath.Join(dir, "Alice_Bob (+15551234567)")); err != nil || !info.IsDir() {
+		t.Fatalf("conversationDir(): info=%+v err=%v", info, err)
+	}
+}
+
+func TestFileExists(t *testing.T) {
+	// fileExists distinguishes a missing file from other Stat errors.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exists"), nil, 0666); err != nil {
+		t.Fatal(err)
+	}
+	d, err := at.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	got, err := fileExists(d, "exists")
+	if err != nil || !got {
+		t.Fatalf("fileExists() existing: want true nil, have %v %v", got, err)
+	}
+	got, err = fileExists(d, "missing")
+	if err != nil || got {
+		t.Fatalf("fileExists() missing: want false nil, have %v %v", got, err)
+	}
+}
+
+func TestCopyAttachmentFailureRemovesFile(t *testing.T) {
+	// If writing an attachment fails after creating the destination, the
+	// partial export file should be removed.
+	d, err := at.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	err = copyAttachment(&signal.Context{}, d, "pending", &signal.Attachment{Pending: true})
+	if err == nil {
+		t.Fatal("copyAttachment() pending: no error")
+	}
+	if ok, err := fileExists(d, "pending"); err != nil || ok {
+		t.Fatalf("copyAttachment() cleanup: exists=%v err=%v", ok, err)
+	}
+}
+
+func TestSetAttachmentModTime(t *testing.T) {
+	// Exported attachment mtimes can be based on either sent or received time.
+	if runtime.GOOS == "windows" {
+		t.Skip("mtime precision differs on Windows runners")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0666); err != nil {
+		t.Fatal(err)
+	}
+	d, err := at.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	att := signal.Attachment{
+		TimeSent: fixedMillis(),
+		TimeRecv: fixedMillis() + int64(time.Hour/time.Millisecond),
+	}
+	if err := setAttachmentModTime(d, "file", &att, mtimeSent); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(time.UnixMilli(att.TimeSent)) {
+		t.Fatalf("mtime sent: want %s, have %s", time.UnixMilli(att.TimeSent), info.ModTime())
+	}
+
+	if err := setAttachmentModTime(d, "file", &att, mtimeRecv); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(time.UnixMilli(att.TimeRecv)) {
+		t.Fatalf("mtime recv: want %s, have %s", time.UnixMilli(att.TimeRecv), info.ModTime())
+	}
+
+	if err := setAttachmentModTime(d, "file", &att, mtimeNone); err != nil {
+		t.Fatal(err)
 	}
 }
 

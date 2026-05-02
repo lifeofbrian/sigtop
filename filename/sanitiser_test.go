@@ -14,10 +14,7 @@
 
 package filename
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestParseOS(t *testing.T) {
 	// The command-line -S option accepts only these named sanitiser targets.
@@ -57,7 +54,7 @@ func TestSanitiseUnix(t *testing.T) {
 		{".", "._"},
 		{"..", ".._"},
 		{"plain.txt", "plain.txt"},
-		{"a" + string(os.PathSeparator) + "b", "a_b"},
+		{"a/b", "a_b"},
 		{"a\x00b", "a_b"},
 		{"a\nb", "a_b"},
 		{"CON", "CON"},
@@ -84,7 +81,7 @@ func TestSanitiseMacos(t *testing.T) {
 		{".", "._"},
 		{"..", ".._"},
 		{"plain.txt", "plain.txt"},
-		{"a" + string(os.PathSeparator) + "b", "a_b"},
+		{"a/b", "a_b"},
 		{"a\x00b", "a_b"},
 		{"a\nb", "a_b"},
 		{"a\U0001f979b", "a_b"},
