@@ -14,7 +14,7 @@ online][3].
 
 ## Installing on Unix
 
-First install [Go][4] (version 1.21 or later) and a C compiler. On systems
+First install [Go][4] (version 1.25 or later) and a C compiler. On systems
 other than OpenBSD, you also need to install `libsecret` and `pkg-config`.
 
 On Ubuntu 24.04 or later, you can run the following command to install the
