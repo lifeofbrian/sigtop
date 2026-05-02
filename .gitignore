@@ -1,3 +1,10 @@
 /sigtop
 /sigtop.exe
 /tags
+
+# Local Go build cache used for sandboxed test runs.
+/.gocache/
+
+# Go test coverage output.
+/coverage.out
+/*.coverprofile
