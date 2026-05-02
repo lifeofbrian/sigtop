@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -61,9 +62,9 @@ func TestDirFileOperations(t *testing.T) {
 	}
 }
 
-func TestDirLinksAndUnlink(t *testing.T) {
-	// Link, symlink, lstat, and unlink are the primitives export code uses to
-	// manage files without changing process-wide working directory.
+func TestDirLinkAndUnlink(t *testing.T) {
+	// Hard links and unlink are primitives export code uses without changing
+	// process-wide working directory.
 	root := t.TempDir()
 	d, err := Open(root)
 	if err != nil {
@@ -77,6 +78,27 @@ func TestDirLinksAndUnlink(t *testing.T) {
 	if err := d.Link(d, "src", "hard", 0); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.Unlink("hard", 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirSymlinkAndLstat(t *testing.T) {
+	// Windows runners may not grant symlink creation privileges.
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	root := t.TempDir()
+	d, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	if err := os.WriteFile(filepath.Join(root, "src"), []byte("hello"), 0666); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Symlink("src", "sym"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,9 +108,6 @@ func TestDirLinksAndUnlink(t *testing.T) {
 	}
 	if info.Mode()&fs.ModeSymlink == 0 {
 		t.Fatalf("Stat() symlink mode: have %v", info.Mode())
-	}
-	if err := d.Unlink("hard", 0); err != nil {
-		t.Fatal(err)
 	}
 	if err := d.Unlink("sym", 0); err != nil {
 		t.Fatal(err)

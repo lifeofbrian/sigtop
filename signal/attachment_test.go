@@ -97,7 +97,11 @@ func TestReadAttachmentFileVersion1(t *testing.T) {
 func TestAttachmentFilePath(t *testing.T) {
 	// Paths may come from another OS, so separators are normalized locally.
 	ctx := Context{dir: "signal-dir"}
-	got := ctx.attachmentFilePath(`sub\file.txt`)
+	foreignPath := `sub\file.txt`
+	if os.PathSeparator == '\\' {
+		foreignPath = "sub/file.txt"
+	}
+	got := ctx.attachmentFilePath(foreignPath)
 	want := filepath.Join("signal-dir", AttachmentDir, "sub", "file.txt")
 	if got != want {
 		t.Fatalf("attachmentFilePath(): want %q, have %q", want, got)
